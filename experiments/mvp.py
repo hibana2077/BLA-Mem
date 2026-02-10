@@ -75,6 +75,11 @@ def main() -> None:
     p.add_argument("--time-aug", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--steps", type=int, default=2000)
+    p.add_argument("--no-tqdm", action="store_true", help="Disable tqdm progress bar")
+    p.add_argument("--eval-every", type=int, default=200, help="Run evaluation every N steps (0 to disable)")
+    p.add_argument("--eval-batches", type=int, default=20, help="Number of random batches to average over during eval")
+    p.add_argument("--patience", type=int, default=0, help="Early stop if no eval improvement for this many evals (0 to disable)")
+    p.add_argument("--min-delta", type=float, default=0.0, help="Minimum improvement in eval metric to reset patience")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--readout-hidden", type=int, default=256)
     p.add_argument("--log-every", type=int, default=50)
@@ -109,8 +114,32 @@ def main() -> None:
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    greater_is_better = args.task == "parity"
+    best_eval_metric = float("-inf") if greater_is_better else float("inf")
+    bad_evals = 0
+
+    def run_eval() -> tuple[float, float]:
+        model.eval()
+        total_loss = 0.0
+        total_metric = 0.0
+        with torch.no_grad():
+            for _ in range(args.eval_batches):
+                x, y = batch_fn(args.batch, args.seq_len, device)
+                pred = model(x)
+                loss = loss_fn(pred, y)
+                total_loss += float(loss.detach())
+
+                if args.task == "adding":
+                    total_metric += float(loss.detach())
+                else:
+                    acc = (pred.argmax(dim=-1) == y).float().mean()
+                    total_metric += float(acc.detach())
+        model.train()
+        return total_loss / args.eval_batches, total_metric / args.eval_batches
+
     model.train()
-    for step in trange(1, args.steps + 1):
+    step_iter = range(1, args.steps + 1) if args.no_tqdm else trange(1, args.steps + 1)
+    for step in step_iter:
         x, y = batch_fn(args.batch, args.seq_len, device)
         pred = model(x)
 
@@ -130,6 +159,27 @@ def main() -> None:
 
         if step % args.log_every == 0:
             print(f"step={step} loss={float(loss.detach()):.4f} {metric_name}={metric:.4f}")
+
+        if args.eval_every > 0 and step % args.eval_every == 0:
+            eval_loss, eval_metric = run_eval()
+            print(f"eval step={step} loss={eval_loss:.4f} {metric_name}={eval_metric:.4f}")
+
+            improved = (
+                (eval_metric > best_eval_metric + args.min_delta)
+                if greater_is_better
+                else (eval_metric < best_eval_metric - args.min_delta)
+            )
+            if improved:
+                best_eval_metric = eval_metric
+                bad_evals = 0
+            else:
+                bad_evals += 1
+                if args.patience > 0 and bad_evals >= args.patience:
+                    print(
+                        f"early_stop step={step} best_{metric_name}={best_eval_metric:.4f} "
+                        f"bad_evals={bad_evals}/{args.patience}"
+                    )
+                    break
 
 
 if __name__ == "__main__":
