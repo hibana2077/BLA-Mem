@@ -26,6 +26,9 @@ class TrainConfig:
 
     grad_clip: float = 1.0
 
+    # debug/sanity: if True, reuse the same (x,y) batch every step.
+    fixed_batch: bool = False
+
 
 class Trainer:
     def __init__(self, model: nn.Module, task: Task, cfg: TrainConfig, device: torch.device) -> None:
@@ -57,8 +60,15 @@ class Trainer:
     def train(self) -> None:
         self.model.train()
 
+        fixed_x = fixed_y = None
+        if self.cfg.fixed_batch:
+            fixed_x, fixed_y = self.task.generate_batch(self.cfg.batch_size, self.cfg.train_len, self.device)
+
         for step in range(1, self.cfg.steps + 1):
-            x, y = self.task.generate_batch(self.cfg.batch_size, self.cfg.train_len, self.device)
+            if self.cfg.fixed_batch:
+                x, y = fixed_x, fixed_y
+            else:
+                x, y = self.task.generate_batch(self.cfg.batch_size, self.cfg.train_len, self.device)
             out = self.model(x)
             loss = self.task.loss(out, y)
 

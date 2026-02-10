@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--eval-every", type=int, default=200)
     t.add_argument("--eval-batches", type=int, default=25)
     t.add_argument("--grad-clip", type=float, default=1.0)
+    t.add_argument(
+        "--fixed-batch",
+        action="store_true",
+        help="Sanity check: reuse the same training batch every step (overfit test)",
+    )
 
     # model shared
     t.add_argument("--d-model", type=int, default=128)
@@ -108,10 +113,11 @@ def cmd_train(args: argparse.Namespace) -> None:
         eval_every=args.eval_every,
         eval_batches=args.eval_batches,
         grad_clip=args.grad_clip,
+        fixed_batch=args.fixed_batch,
     )
 
     print(
-        f"task={task.name} model={args.model} device={device} steps={train_cfg.steps} batch={train_cfg.batch_size} train_len={train_cfg.train_len} test_lens={train_cfg.test_lens}",
+        f"task={task.name} model={args.model} device={device} steps={train_cfg.steps} batch={train_cfg.batch_size} train_len={train_cfg.train_len} test_lens={train_cfg.test_lens} fixed_batch={train_cfg.fixed_batch}",
         flush=True,
     )
 

@@ -1,0 +1,55 @@
+python3 -m bla_mem.cli train --task parity --model transformer --train-len 16 --test-lens 16 32 64 --steps 2000 --dropout 0 --pooling last --lr 1e-3
+/usr/local/lib/python3.12/dist-packages/torch/nn/modules/transformer.py:392: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+task=parity model=transformer device=cuda steps=2000 batch=64 train_len=16 test_lens=(16, 32, 64)
+step=1 loss=0.842520 metric=0.484375 train_len=16
+step=50 loss=0.708460 metric=0.281250 train_len=16
+step=100 loss=0.708352 metric=0.515625 train_len=16
+step=150 loss=0.695788 metric=0.500000 train_len=16
+step=200 loss=0.693315 metric=0.531250 train_len=16
+EVAL step=200 L=16 loss=0.702760 metric=0.481875 | L=32 loss=0.696056 metric=0.503125 | L=64 loss=0.692497 metric=0.502500
+step=250 loss=0.693733 metric=0.484375 train_len=16
+step=300 loss=0.694884 metric=0.437500 train_len=16
+step=350 loss=0.715699 metric=0.406250 train_len=16
+step=400 loss=0.698102 metric=0.453125 train_len=16
+EVAL step=400 L=16 loss=0.693257 metric=0.491250 | L=32 loss=0.692816 metric=0.513125 | L=64 loss=0.693377 metric=0.502500
+step=450 loss=0.693693 metric=0.421875 train_len=16
+step=500 loss=0.694886 metric=0.484375 train_len=16
+step=550 loss=0.693227 metric=0.484375 train_len=16
+step=600 loss=0.688848 metric=0.546875 train_len=16
+EVAL step=600 L=16 loss=0.696590 metric=0.508750 | L=32 loss=0.695407 metric=0.511875 | L=64 loss=0.697811 metric=0.493125
+step=650 loss=0.692092 metric=0.562500 train_len=16
+step=700 loss=0.693311 metric=0.484375 train_len=16
+step=750 loss=0.686009 metric=0.562500 train_len=16
+step=800 loss=0.694234 metric=0.500000 train_len=16
+EVAL step=800 L=16 loss=0.695409 metric=0.489375 | L=32 loss=0.695537 metric=0.483750 | L=64 loss=0.692062 metric=0.528125
+step=850 loss=0.689806 metric=0.562500 train_len=16
+step=900 loss=0.693862 metric=0.484375 train_len=16
+step=950 loss=0.691483 metric=0.546875 train_len=16
+step=1000 loss=0.688801 metric=0.546875 train_len=16
+EVAL step=1000 L=16 loss=0.697816 metric=0.485625 | L=32 loss=0.695260 metric=0.502500 | L=64 loss=0.696555 metric=0.484375
+step=1050 loss=0.695449 metric=0.421875 train_len=16
+step=1100 loss=0.696138 metric=0.484375 train_len=16
+step=1150 loss=0.709492 metric=0.421875 train_len=16
+step=1200 loss=0.696506 metric=0.390625 train_len=16
+EVAL step=1200 L=16 loss=0.693120 metric=0.503750 | L=32 loss=0.693427 metric=0.495000 | L=64 loss=0.693666 metric=0.493125
+step=1250 loss=0.694610 metric=0.500000 train_len=16
+step=1300 loss=0.693331 metric=0.484375 train_len=16
+step=1350 loss=0.685607 metric=0.562500 train_len=16
+step=1400 loss=0.670738 metric=0.640625 train_len=16
+EVAL step=1400 L=16 loss=0.695630 metric=0.504375 | L=32 loss=0.695019 metric=0.509375 | L=64 loss=0.697658 metric=0.496250
+step=1450 loss=0.694475 metric=0.468750 train_len=16
+step=1500 loss=0.709051 metric=0.406250 train_len=16
+step=1550 loss=0.696454 metric=0.468750 train_len=16
+step=1600 loss=0.698548 metric=0.500000 train_len=16
+EVAL step=1600 L=16 loss=0.698436 metric=0.500000 | L=32 loss=0.698338 metric=0.497500 | L=64 loss=0.697711 metric=0.498125
+step=1650 loss=0.693729 metric=0.500000 train_len=16
+step=1700 loss=0.687744 metric=0.562500 train_len=16
+step=1750 loss=0.688962 metric=0.546875 train_len=16
+step=1800 loss=0.688393 metric=0.609375 train_len=16
+EVAL step=1800 L=16 loss=0.692800 metric=0.513750 | L=32 loss=0.693498 metric=0.504375 | L=64 loss=0.693384 metric=0.506875
+step=1850 loss=0.691216 metric=0.531250 train_len=16
+step=1900 loss=0.698741 metric=0.421875 train_len=16
+step=1950 loss=0.690187 metric=0.562500 train_len=16
+step=2000 loss=0.696309 metric=0.468750 train_len=16
+EVAL step=2000 L=16 loss=0.694050 metric=0.495000 | L=32 loss=0.692526 metric=0.517500 | L=64 loss=0.694010 metric=0.498125
