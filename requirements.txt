@@ -2,9 +2,6 @@
 torch>=2.1
 numpy>=1.26
 
-# Progress / CLI niceties
-tqdm
-
 # Optional: signature computation (installation depends on torch/cuda build)
 # If signatory is hard to install on your cloud image, you can disable it and
 # swap in another signature library later.
