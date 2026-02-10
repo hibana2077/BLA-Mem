@@ -1,186 +1,168 @@
-# Research Idea Proposal：BCH Log-Signature Algebraic Memory（BLA-Mem）
-
-（以 log-signature 的自由 Lie 代數結構做**可結合、可平行 scan** 的序列記憶）
+下面給你 5 個**全新（至少在你表格那條主線：SSM/Selective/Gating/Linear-Attention/Hybrid 的既有套路之外）**的 modelling methodology 方向。每個都能用 **PyTorch** 做出來、也能用 **Parity / Adding problem** 做 toy exp 驗證；我同時把「數學理論基底」「核心機制」「為何對 toy task 有效」「最小可行實作」寫清楚。
 
 ---
 
-## 0. 一句話摘要
+## 1) Sheaf-Gluing 序列層：用 **Sheaf Laplacian / Cohomology** 做「全域一致性」傳播（不是注意力、不是 scan gating）
 
-把序列視為路徑，對每個片段取 **log-signature（位於自由 Lie 代數）**當作「片段記憶」，再用 **Chen identity 對應的路徑拼接**，在 log 域用 **BCH（Baker–Campbell–Hausdorff）**做成**可結合（associative）**的記憶合成運算，從而用 **parallel prefix scan / segment tree** 在 GPU 上平行計算長序列的全域或逐點記憶。
+**理論基底**：Spectral sheaf theory 把「節點上的向量空間 + 邊上的限制映射」組成 cellular sheaf，並導出 **sheaf Laplacian**；其譜性質可編碼「幾何 + 非幾何」一致性。 ([arXiv][1])
 
----
-
-## 1. 背景與動機
-
-長序列建模常見兩個瓶頸：
-
-1. **RNN 類**：時間步依賴造成序列長度越長越難平行化；梯度/記憶也容易退化。
-2. **Attention 類**：計算/記憶體常見 (O(T^2))，長度上去很吃力。
-
-**Signature / log-signature**（rough paths 理論核心物件）提供一個不同視角：
-
-* Signature 將路徑映射成一組迭代積分特徵，具有良好代數結構；**Chen’s identity**給出「路徑拼接 ↔ 特徵可組合」的精確關係，能把整段的 signature 由子段組合而得。([arXiv][1])
-* log-signature 是 signature 的「對數」，落在自由 Lie 代數（Lie series），通常在特徵維度上更緊湊，且更貼近可組合的群/代數幾何結構。([researchers.ms.unimelb.edu.au][2])
-* 更關鍵的是：**兩段路徑拼接的 log-signature，可用 BCH 把兩段 log-signature 合成**。這直接把「記憶合成」變成一個（截斷後）可實作的代數運算。([warwick.ac.uk][3])
-
-因此你提出的 BLA-Mem 方向，本質是在做一個**不靠 recurrence、也不靠 attention**的「代數式可結合摘要（associative summary）」，天然支援 parallel scan（類 prefix-sum）。([cs.cmu.edu][4])
-
----
-
-## 2. 研究問題（Research Questions）
-
-**RQ1（可行性）**：用「片段 log-signature + 截斷 BCH 合成」做記憶，是否能在經典 long-range toy tasks（adding / parity）中隨長度擴展而維持穩定表現？
-**RQ2（平行化收益）**：在相同/相近參數量下，BLA-Mem 的 throughput / latency 是否能因 associative scan 顯著優於序列式 recurrence？([cs.cmu.edu][4])
-**RQ3（不變性/歸納偏置）**：在「同一訊號不同速度採樣」的時間重參數測試中，BLA-Mem 是否能展現 signature 家族的優勢（並釐清何時需要 time augmentation）？([arXiv][1])
-**RQ4（你的 novelty 點）**：**自適應截斷階數**能否把計算量變成「內容驅動」，同時維持準確率/穩定性？
-
----
-
-## 3. 方法：BLA-Mem 模組設計
-
-### 3.1 路徑化（Pathification）與 time augmentation
-
-給定序列 (x_{1:T}\in\mathbb{R}^d)，把它視為分段線性路徑 (X(t))。
-若任務對「發生速度」敏感，signature 對時間重參數本身具有不變性，常見做法是把時間作為一個額外通道（time augmentation）以保留速率資訊。([turing.ac.uk][5])
-
-### 3.2 片段表徵：截斷 log-signature
-
-把路徑切成片段（window / chunk）({X^{(i)}}_{i=1:N})，每段長度 (\Delta)：
+**核心機制（新 modelling 觀點）**
+把長度 (N) 的序列當作 1D cell complex：頂點 (i) 存 token embedding (x_i)，邊 ((i,i+1)) 存一個「一致性約束空間」。學一組 restriction maps (R_{i\to e},R_{i+1\to e})（小線性層即可），然後用 sheaf Laplacian (L_{\mathcal{F}}) 做全域解的「gluing」：
 [
-\ell_i = \log \mathrm{Sig}^{\le m}(X^{(i)}) \in \mathfrak{g}^{\le m}(\mathbb{R}^d)
+h ;=; \arg\min_{z};\sum_i |z_i - \phi(x_i)|^2 ;+;\lambda \sum_{e=(i,i+1)}|R_{i\to e} z_i - R_{i+1\to e} z_{i+1}|^2
 ]
-其中 (\mathfrak{g}^{\le m}) 是截斷到階數 (m) 的自由 Lie 代數。
-
-**工程落地**：用 Signatory（PyTorch，支援 GPU/backprop）直接算 signature / logsignature。([OpenReview][6])
-
-### 3.3 記憶合成：截斷 BCH 作為二元可結合運算
-
-由 Chen identity 可知「路徑拼接 ↔ signature 的乘法結構」，而在 log 域，拼接對應到 BCH：兩段 log-signature 的合成可用 BCH 算出。([arXiv][1])
-
-定義二元運算（你的“memory merge”）：
+對應到線性系統：
 [
-\ell_{a}\ \oplus\ \ell_{b} ;=; \mathrm{BCH}*{\le m}(\ell_a,\ell_b)
+(I+\lambda L_{\mathcal{F}}),h = b
 ]
-其中 (\mathrm{BCH}*{\le m}) 是截斷到階 (m) 的 BCH Lie 多項式（由巢狀 commutator 組成）。
+這一步不是 attention 的 QK，也不是 SSM 的 recurrence；它是「全域一致性投影」。
 
-### 3.4 Parallel scan：全域/逐點記憶
+**為何對 Parity / Adding 有效**
 
-因為 (\oplus) 對應路徑拼接（在截斷設定下設計成一致的合成規則），你可以用：
+* **Parity** 是全域 XOR：你可以把 restriction maps 設計成把局部資訊映射到某個「可加的代數表示」（例如把 bit 映射到 (\pm 1) 乘法群/或模 2 的 one-hot），全域 gluing 會迫使訊息沿著鏈一致地傳遞，最後讀出全域一致解的某個分量。
+* **Adding** 需要「定位 + 聚合」：兩個被標記的位置可以被 (\phi(x_i)) 放大到一致性場中，gluing 解相當於在整條鏈上做結構化傳播與平滑，最後用讀出頭抽出兩個峰值的和（或直接讓模型學出該 mapping）。
 
-* **segment tree reduce** 得到整段全域記憶 (\ell_{1:N}^{\mathrm{global}})
-* **prefix scan** 得到每個位置的前綴記憶（類 hidden state，但可平行）
+**PyTorch 最小實作**
 
-Prefix scan 是典型可平行 primitive（Blelloch scan 等），深度 (O(\log N)) 且總工作量 (O(N))（以每次合成成本為單位）。([cs.cmu.edu][4])
+* 建 (L_{\mathcal{F}}) 為 **sparse**（block-tridiagonal），用 `torch.sparse`。
+* 解線性系統可用：固定迭代步數的 **Conjugate Gradient**（手寫 CG，autograd OK），或少量 `power iteration` 近似 ((I+\lambda L)^{-1})。
+* 複雜度：每次 matvec (O(N d^2))（若每點 d 維、restriction maps 用低秩/分組可到 (O(Nd))）。
 
-### 3.5 Readout（下游頭）
+**toy exp（你可以直接照做）**
 
-* 分類：(y=\mathrm{MLP}(\ell^{\mathrm{global}}))
-* 序列標註：(y_t=\mathrm{MLP}(\ell^{\mathrm{prefix}}_t)) 或加上 local features（例如最後一段的 (\ell)）
-
----
-
-## 4. 你的 novelty：自適應截斷階數（content-driven truncation）
-
-固定 (m) 的痛點是計算量與特徵維度可能爆炸（尤其 (d) 大時）。log-signature 雖比 full tensor signature 更緊湊，但仍會隨階數成長。([Adeline Fermanian][7])
-
-**提案：讓 (m) 變成動態的**
-對每段（或對合成節點）估計「高階尾項能量」並決定是否需要更高階：
-
-* 先算到 (m_{\max})，得到各階 block (\ell^{(k)})，用
-  [
-  r_k=\frac{|\ell^{(k)}|}{\sum_{j\le k}|\ell^{(j)}|}
-  ]
-  若 (r_k<\tau) 連續多個 (k) 成立則提前截斷到 (m=k)。
-* 或者用「合成後增量」來判斷：比較 (\mathrm{BCH}*{\le k}) 與 (\mathrm{BCH}*{\le (k+1)}) 的差，差小就停止加階。
-
-你可以把這做成兩種版本：
-
-1. **硬截斷（hard adaptive m）**：節省算力最明顯。
-2. **軟門控（soft gating）**：對每階係數學一個 gate（例如 sigmoid），讓模型自己抑制不需要的高階項，同時保留端到端可微。
+* Parity：長度 64/128/256，測試能否 extrapolate 到 512。
+* Adding：標準 Adding problem（兩個標記、輸出和），同樣做長度外推。
+* Ablation：拿掉 sheaf term（(\lambda=0)）、restriction map 固定為 identity、或只做 local smoothing（看是否需要 sheaf 結構）。
 
 ---
 
-## 5. 理論與分析（你可以寫成 analysis paper 的骨架）
+## 2) Ultrametric Heat-Flow Memory：用 **ultrametric / hierarchical Laplacian** 做「分層擴散記憶」（不是多頭注意力、不是 1D scan）
 
-### 5.1 可結合性與正確性（相對於路徑拼接）
+**理論基底**：p-adic / ultrametric diffusion、ultrametric networks、hierarchical Laplacian 的 Markov generator 與譜性質。 ([arXiv][2])
 
-* Signature 的 Chen identity 給出「子段可組合」的嚴格代數結構。([arXiv][1])
-* log-signature 拼接用 BCH 表達。([warwick.ac.uk][3])
-* 截斷帶來近似誤差：你的 analysis 可以聚焦在
+**核心機制（新 modelling 觀點）**
+序列位置 (i\in{1,\dots,N}) 不用歐式距離，而用「樹狀分群」形成 ultrametric（例如二元樹分段：([1..N]) 切半、再切半…）。定義 hierarchical Laplacian (L_H)（由各層的 choice function / jump rates 決定），做 heat flow：
+[
+h = \exp(-\tau L_H), b
+]
+其中 (b_i=\phi(x_i))。(\exp(-\tau L_H)) 是**分層擴散核**：遠距離傳播走高層、近距離走低層。
 
-  * 誤差如何隨 (m)、(\Delta)、路徑變差/控制量改變
-  * 自適應截斷如何在固定誤差門檻下節省計算
+**為何對 Parity / Adding 有效**
 
-### 5.2 計算複雜度與平行化
+* **Parity**：XOR 對「所有位元」敏感，分層擴散天然提供 **log-depth** 的全域 mixing（高層很快把遠距離資訊聚起來），比純 local 傳遞更容易外推到長序列。
+* **Adding**：兩個標記點的訊號可以先在低層保持尖峰，再逐層向上聚合；讀出時同時保留「局部定位」與「全域聚合」。
 
-* 設 (N=T/\Delta)。scan 深度 (O(\log N))，適合 GPU。([cs.cmu.edu][4])
-* 主要成本在「logsignature 計算」與「BCH 合成」；你可以把論文的工程亮點放在：
+**PyTorch 最小實作**
 
-  * BCH 的高效實作（預先列出 commutator basis / 查表）
-  * 分層合成時的快取策略（tree nodes reuse）
-  * adaptive truncation 的實際 wall-clock 改善
+* 不用真的做 p-adic；直接用 **binary tree pooling/unpooling** 實作 ( \exp(-\tau L_H)) 的近似：
 
----
-
-## 6. 實驗計畫（Toy → 性質驗證 → 延伸）
-
-### 6.1 Toy tasks（快速驗證）
-
-1. **Adding problem / long-range sum**：長度拉到 8k、16k 看是否穩定。
-2. **k-step parity**：測長距離依賴與梯度/記憶退化。
-
-對照組（baselines）建議至少含：
-
-* GRU/LSTM（序列式）
-* Transformer（可限制 attention window，公平比較）
-* 一個長序列友善模型（你選：S4/Hyena/Mamba 類；若你要寫 analysis paper，也可只做少量代表性對照）
-
-### 6.2 不變性/歸納偏置測試：時間重參數
-
-* 同一條訊號，做不同速度採樣（stretch / compress），測分類/回歸是否一致。
-* 兩種設定：
-  (a) **不加 time channel**：預期對速度較不敏感（更接近重參數不變）。([arXiv][1])
-  (b) **加入 time augmentation**：若任務確實依賴速率，預期能恢復可辨識性。([turing.ac.uk][5])
-
-### 6.3 Ablation（把論文 novelty 打實）
-
-* 固定 (m) vs adaptive (m)（同準確率下的 FLOPs / latency）
-* 不同 chunk size (\Delta)
-* BCH 截斷階數對穩定性的影響
-* prefix memory（逐點）vs global memory（整段）
-
-### 6.4 系統面評估（你主打 parallel scan 就要量）
-
-* 端到端吞吐（tokens/s）、延遲（ms）、顯存占用
-* 序列長度 scaling curve
-* scan 實作：tree reduce vs Blelloch scan（或直接用框架 primitive）
+  * 令每層做一次「區塊平均」得到 coarser 表示，再按 learned mixing 系數把各層回灌到 leaf。
+* 你可以把它寫成一個純張量操作的 layer：`for level in levels: pooled = avg_pool1d(...); ...`
+* 複雜度：(O(N d \log N))，GPU 友善。
 
 ---
 
-## 7. 預期貢獻（寫在 proposal 的 “Contributions”）
+## 3) Magnus–Commutator Evolution Layer：用 **Magnus expansion / Lie-group integrator** 讓「非交換動力學」變成可學的序列算子（不是 S4 那種固定結構 A）
 
-1. **新的序列記憶模組**：以 log-signature 作為路徑幾何不變量特徵，並用 BCH 提供可組合的記憶合成。([researchers.ms.unimelb.edu.au][2])
-2. **可平行化的長序列建模路線**：把「hidden state 更新」改寫成 associative scan primitive，充分利用 GPU 平行 prefix-sum 類算法。([cs.cmu.edu][4])
-3. **自適應截斷階數**：把計算量變成內容驅動，並用實證 + 誤差分析支持。
-4. **可重現的 PyTorch 實作**：基於 Signatory 的 logsignature + 自行實作 BCH merge（並提供 benchmark）。([OpenReview][6])
+**理論基底**：Magnus expansion 給線性時變系統 (\dot{y}=A(t)y) 的解 (y(T)=\exp(\Omega(T))y(0))，(\Omega) 由積分與**巢狀對易子**構成，保幾何性質/穩定性。 ([arXiv][3])
+
+**核心機制（新 modelling 觀點）**
+把每個 token 產生一個小矩陣生成元 (A_i\in\mathbb{R}^{d\times d})（用低秩或 block-diag 控制成本）。序列更新不是 recurrence，而是「把整段序列的生成元折成一個 log-exponential」：
+[
+h_{\text{out}} = \exp(\Omega),h_{\text{in}}
+]
+其中 (\Omega) 用截斷 Magnus：
+[
+\Omega \approx \sum_i A_i ;+; \frac12\sum_{i<j}[A_i,A_j] ;+; \cdots
+]
+([A_i,A_j]=A_iA_j-A_jA_i) 捕捉「順序造成的非交換性」。
+
+**為何對 Parity / Adding 有效**
+
+* **Parity** 的本質是高度非線性組合；對易子項提供一種「不靠 gating/attention」的高階交互方式，且天然對順序敏感。
+* **Adding** 需要對兩個位置做線性聚合；一階項就能做，加上對易子可學到「標記位置交互」與抗干擾。
+
+**PyTorch 最小實作**
+
+* `A_i = lowrank(U(x_i) @ V(x_i).T)` 或 block-diag（例如每 8 維一塊）。
+* 只取到二階（含一次 commutator）就夠做 toy。
+* `torch.linalg.matrix_exp` 對小 block 很快；或用 Pade/Scaling 自寫也行。
+* 複雜度：若 block 大小 (m)，則 (O(N \cdot (d/m)\cdot m^3))。
 
 ---
 
-## 8. 最小可行落地（MVP）建議
+## 4) Pre-Lie / Free-Cumulant Scan：用 **non-crossing partitions 的 cumulant 代數** 做「前綴統計的高階壓縮」（不是 kernel trick、不是注意力）
 
-* 先做：固定 (m=2,3,4) + chunked logsig + BCH 合成 + global readout
-* 只跑：adding、parity、重參數不變性
-* 同時記錄：準確率 vs 長度、訓練穩定性、吞吐/顯存
-* 然後再加：adaptive truncation（硬截斷版本通常最好先出結果）
+**理論基底**：free probability 用 **non-crossing partitions** 定義 free cumulants，並用 Möbius inversion 把 moments ↔ cumulants 互轉；也有把 cumulant functionals 放進 pre-Lie 結構、連到 Magnus 型展開的結果。 ([math.uni-sb.de][4])
+
+**核心機制（新 modelling 觀點）**
+把序列嵌入視為「非交換隨機變數序列」的樣本，維持一組**截斷到階數 K 的 cumulant 狀態**：
+
+* (k_1)：一階累積（類似 mean，但在代數上不同）
+* (k_2)：二階 cumulant（非線性相依）
+* …
+  更新不是 RNN gate，而是用 non-crossing 的遞推把新 token (x_t) 對 cumulants 的貢獻併入（你可以只做到 K=3 或 4，就已經是新的 inductive bias）。
+
+直覺：cumulants 是「把冗餘高階相依壓縮成少量可加物件」；對長距依賴（parity）更像在追「全域相依結構」而不是追逐每個 pair 的相似度。
+
+**為何對 Parity / Adding 有效**
+
+* **Parity**：全域 XOR 會在高階相依上很強（bit 間不是獨立），截斷 cumulants 提供一種「用固定維度追高階依賴」的路線。
+* **Adding**：一階/二階 cumulant 足以表示「兩個尖峰的線性疊加」與其交互。
+
+**PyTorch 最小實作**
+
+* K 小（3~4），狀態就是少量張量：`k1, k2, k3...`
+* 遞推可設計成：每步把 `phi(x_t)` 注入，並用幾個可學的雙線性/三線性算子更新（但更新規則遵守你定的 cumulant algebra 結構，而不是任意 MLP）。
+* 複雜度：(O(N K d^2))（用低秩可降）。
 
 ---
 
-如果你願意，我可以把這份 proposal 直接整理成「論文式」的 2–4 頁格式（含 related work 段落結構、公式編號、實驗表格模板、以及你 novelty 的 claim/lemma 該怎麼寫得最像 analysis paper）。
+## 5) Dirichlet-Form Jump Generator Layer：用 **non-local Dirichlet form / symmetric jump process** 建「可學的跳躍式全域傳播」（不是卷積、不是注意力）
 
-[1]: https://arxiv.org/pdf/1603.03788?utm_source=chatgpt.com "A Primer on the Signature Method in Machine Learning"
-[2]: https://researchers.ms.unimelb.edu.au/~xgge%40unimelb/Files/Papers/The%20Signature%20of%20a%20Rough%20Path-Uniqueness.pdf?utm_source=chatgpt.com "The Signature of a Rough Path: Uniqueness"
-[3]: https://warwick.ac.uk/jreizenstein/logsignatures.pdf?utm_source=chatgpt.com "Calculation of Iterated-Integral Signatures and Log ..."
-[4]: https://www.cs.cmu.edu/~guyb/papers/Ble93.pdf?utm_source=chatgpt.com "Prefix Sums and Their Applications"
-[5]: https://www.turing.ac.uk/sites/default/files/2023-11/ons_nowcasting_2023.pdf?utm_source=chatgpt.com "Nowcasting with signature methods"
-[6]: https://openreview.net/forum?id=lqU2cs3Zca&utm_source=chatgpt.com "Signatory: differentiable computations of the signature and ..."
-[7]: https://afermanian.github.io/assets/docs/master_thesis_fermanian.pdf?utm_source=chatgpt.com "Signature and statistical learning"
+**理論基底**：對稱 non-local Dirichlet form
+[
+\mathcal{E}(f,f)=\iint (f(y)-f(x))^2 J(x,y),dxdy
+]
+對應到一個**穩定的 Markov jump process**與熱核估計；其生成元提供全域、可控的長距傳播。 ([arXiv][5])
+
+**核心機制（新 modelling 觀點）**
+把序列視為離散點集，學一個**對稱跳躍核** (J_{ij}=J_{ji}\ge 0)（只允許依賴 (|i-j|) 的參數化以保外推，例如 rational basis / spline on distance），定義生成元：
+[
+(L_J h)*i=\sum*{j\ne i} J_{ij}(h_i-h_j)
+]
+然後做一步「跳躍傳播」：
+[
+h = \exp(-\tau L_J),b
+]
+你可以把 (J_{ij}) 做成**重尾**（長距跳躍不快速衰減），讓模型天然具備 long-range mixing，但又因為是 Dirichlet form 結構而穩定。
+
+**為何對 Parity / Adding 有效**
+
+* **Parity**：需要把所有 bit 的影響快速混到讀出端；重尾跳躍核提供直接長距路徑（不是靠層數堆出來）。
+* **Adding**：兩個標記位置到輸出聚合點可以用少數跳躍完成；同時 (L_J) 是「差分形式」，對噪聲不敏感。
+
+**PyTorch 最小實作**
+
+* (J_{ij}) 不要顯式 (N^2)：用距離桶（bucketed distances）或用 FFT-able 的 Toeplitz 近似（若 (J) 只依賴 (|i-j|)）。
+* `exp(-τL)` 可用 Chebyshev 多項式近似或少步 Krylov（只需要 matvec）。
+* 複雜度：若 Toeplitz/FFT，近似可到 (O(N\log N))；bucket 距離是 (O(NB))。
+
+---
+
+# 建議你怎麼用 toy exp 快速「驗新方法」
+
+1. **先只做單層**（每個方法一層 + 線性讀出），看是否能在短長度收斂、再看外推。
+2. 指標：
+
+   * Parity：accuracy vs length（train 128、test 256/512）。
+   * Adding：MSE vs length 外推。
+3. 最重要的 sanity check：把參數量對齊（避免「只是更大」）。
+
+如果你要我幫你把其中一個方向（我建議先從 **Sheaf-Gluing** 或 **Ultrametric Heat-Flow**）寫成**可直接跑的 PyTorch toy baseline（含資料生成、訓練 loop、外推評估）**，我可以直接給你一份最小 repo 風格的程式骨架。
+
+[1]: https://arxiv.org/html/2501.19207v1?utm_source=chatgpt.com "Learning Sheaf Laplacian Optimizing Restriction Maps - arXiv"
+[2]: https://arxiv.org/pdf/2201.06452?utm_source=chatgpt.com "arXiv:2201.06452v3 [math-ph] 13 Apr 2022"
+[3]: https://arxiv.org/pdf/0810.5488?utm_source=chatgpt.com "The Magnus expansion and some of its applications"
+[4]: https://www.math.uni-sb.de/ag/speicher/surveys/speicher/bielefeld.pdf?utm_source=chatgpt.com "Free Probability Theory and Random Matrices"
+[5]: https://arxiv.org/abs/math/0609842?utm_source=chatgpt.com "Non-local Dirichlet Forms and Symmetric Jump Processes"
