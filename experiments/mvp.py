@@ -206,6 +206,13 @@ def main() -> None:
     p.add_argument("--grad-clip", type=float, default=1.0, help="0 to disable")
     p.add_argument("--seed", type=int, default=0, help="0 to disable")
     p.add_argument("--readout-hidden", type=int, default=256)
+    p.add_argument(
+        "--bla-pool",
+        choices=["last", "mean", "attn"],
+        default="last",
+        help="BLA readout pooling over chunk-prefix representations.",
+    )
+    p.add_argument("--bla-dropout", type=float, default=0.0, help="Dropout in BLA readout MLP")
     p.add_argument("--tf-nhead", type=int, default=8)
     p.add_argument("--tf-layers", type=int, default=4)
     p.add_argument("--tf-ffn", type=int, default=1024)
@@ -245,6 +252,8 @@ def main() -> None:
             chunk_size=args.chunk,
             time_aug=args.time_aug,
             readout_hidden=args.readout_hidden,
+            readout_pool=args.bla_pool,
+            readout_dropout=args.bla_dropout,
             out_dim=out_dim,
         )
         model: nn.Module = BLAMem(cfg).to(device)

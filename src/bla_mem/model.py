@@ -18,6 +18,8 @@ class BLAMemConfig:
     chunk_size: int
     time_aug: bool = True
     readout_hidden: int = 256
+    readout_pool: str = "last"  # last | mean | attn (over chunk prefixes)
+    readout_dropout: float = 0.0
     out_dim: int = 1
 
 
@@ -34,15 +36,25 @@ class BLAMem(nn.Module):
         super().__init__()
         self.cfg = cfg
 
+        if cfg.readout_pool not in {"last", "mean", "attn"}:
+            raise ValueError("readout_pool must be one of: last, mean, attn")
+        if cfg.readout_dropout < 0.0:
+            raise ValueError("readout_dropout must be >= 0")
+
         channels = cfg.input_dim + (1 if cfg.time_aug else 0)
         self.channels = channels
 
         # Flat dimension of levels 1..m in tensor basis
         self.mem_dim = sum(channels**k for k in range(1, cfg.depth + 1))
 
+        if cfg.readout_pool == "attn":
+            self.pool_query = nn.Parameter(torch.empty(self.mem_dim))
+            nn.init.normal_(self.pool_query, mean=0.0, std=0.02)
+
         self.readout = nn.Sequential(
             nn.Linear(self.mem_dim, cfg.readout_hidden),
             nn.ReLU(),
+            nn.Dropout(p=cfg.readout_dropout),
             nn.Linear(cfg.readout_hidden, cfg.out_dim),
         )
 
@@ -68,8 +80,16 @@ class BLAMem(nn.Module):
 
         prefix = hillis_steele_scan_inclusive(log_levels, merge=merge, dim=1)
 
-        # global memory = last prefix element
-        global_levels = [lvl[:, -1, :] for lvl in prefix]
-        flat = flatten_levels(global_levels, include_level0=False)
+        # Per-chunk prefix representations: (B, N, mem_dim)
+        flat_seq = torch.cat([lvl[:, :, :] for lvl in prefix[1:]], dim=-1)
 
-        return self.readout(flat)
+        if self.cfg.readout_pool == "mean":
+            pooled = flat_seq.mean(dim=1)
+        elif self.cfg.readout_pool == "attn":
+            scores = torch.matmul(flat_seq, self.pool_query)  # (B, N)
+            weights = torch.softmax(scores, dim=1)
+            pooled = (weights.unsqueeze(-1) * flat_seq).sum(dim=1)
+        else:
+            pooled = flat_seq[:, -1, :]
+
+        return self.readout(pooled)
