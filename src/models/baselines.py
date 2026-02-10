@@ -113,3 +113,57 @@ class TransformerBaseline(nn.Module):
         add_pred = self.add_head(last_hidden)
         
         return parity_logits, add_pred
+
+
+class GRUBaseline(nn.Module):
+    """
+    Standard GRU Baseline.
+    """
+    def __init__(self, d_in, d_model=64, num_layers=1):
+        super().__init__()
+        self.d_model = d_model
+        # batch_first=True so input is (B, T, d_in)
+        self.rnn = nn.GRU(d_in, d_model, num_layers=num_layers, batch_first=True)
+        
+        # Heads
+        self.parity_head = nn.Linear(d_model, 2)
+        self.add_head = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        # x: (B, T, d_in)
+        out, _ = self.rnn(x)
+        
+        # Take last time step
+        last_hidden = out[:, -1, :]
+        
+        parity_logits = self.parity_head(last_hidden)
+        add_pred = self.add_head(last_hidden)
+        
+        return parity_logits, add_pred
+
+
+class LSTMBaseline(nn.Module):
+    """
+    Standard LSTM Baseline.
+    """
+    def __init__(self, d_in, d_model=64, num_layers=1):
+        super().__init__()
+        self.d_model = d_model
+        # batch_first=True so input is (B, T, d_in)
+        self.rnn = nn.LSTM(d_in, d_model, num_layers=num_layers, batch_first=True)
+        
+        # Heads
+        self.parity_head = nn.Linear(d_model, 2)
+        self.add_head = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        # x: (B, T, d_in)
+        out, _ = self.rnn(x)
+        
+        # Take last time step
+        last_hidden = out[:, -1, :]
+        
+        parity_logits = self.parity_head(last_hidden)
+        add_pred = self.add_head(last_hidden)
+        
+        return parity_logits, add_pred

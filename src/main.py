@@ -5,7 +5,7 @@ import torch.nn as nn
 import time
 from src.data import ParityDataset, AddingDataset
 from src.models.gssm import GSSM
-from src.models.baselines import SimpleMamba, TransformerBaseline
+from src.models.baselines import SimpleMamba, TransformerBaseline, GRUBaseline, LSTMBaseline
 
 def get_model(args, device):
     if args.task == 'parity':
@@ -23,6 +23,10 @@ def get_model(args, device):
         return GSSM(d_in=d_in, d_model=args.d_model, k_group=args.d_model//2).to(device)
     elif args.model == 'mamba':
         return SimpleMamba(d_in=d_in, d_model=args.d_model).to(device)
+    elif args.model == 'gru':
+        return GRUBaseline(d_in=d_in, d_model=args.d_model).to(device)
+    elif args.model == 'lstm':
+        return LSTMBaseline(d_in=d_in, d_model=args.d_model).to(device)
     elif args.model == 'transformer':
         # Allocate enough PE for the longest sequence we might see
         return TransformerBaseline(d_in=d_in, d_model=args.d_model, max_len=max_seq_len * 2).to(device)
@@ -102,7 +106,7 @@ def train(args):
             cur_len_str = f"| Len: {train_ds.seq_len} " if args.curriculum else ""
             print(f"Step {step}/{args.steps} {cur_len_str}| Loss: {loss.item():.6f} | Val Loss: {val_loss.item():.6f} | {metric_str} | Time: {elapsed:.1f}s")
     
-    print("Training finished.")
+    print("Training finished."), 'gru', 'lstm'
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
