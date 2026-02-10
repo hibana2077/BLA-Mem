@@ -17,10 +17,28 @@ class BLAMemConfig:
     depth: int
     chunk_size: int
     time_aug: bool = True
+    prenorm: bool = True
+    norm_eps: float = 1e-5
     readout_hidden: int = 256
     readout_pool: str = "last"  # last | mean | attn (over chunk prefixes)
     readout_dropout: float = 0.0
+    readout_residual: bool = True
     out_dim: int = 1
+
+
+class _ResidualReadoutBlock(nn.Module):
+    def __init__(self, dim: int, hidden: int, dropout: float, *, eps: float):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim, eps=eps)
+        self.ff = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.GELU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(hidden, dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.ff(self.norm(x))
 
 
 class BLAMem(nn.Module):
@@ -47,16 +65,34 @@ class BLAMem(nn.Module):
         # Flat dimension of levels 1..m in tensor basis
         self.mem_dim = sum(channels**k for k in range(1, cfg.depth + 1))
 
+        if cfg.norm_eps <= 0:
+            raise ValueError("norm_eps must be > 0")
+
+        # PreNorm on each log-signature level (k=1..depth), shaped (B, N, channels**k)
+        if cfg.prenorm:
+            self.level_norms = nn.ModuleList(
+                [nn.LayerNorm(channels**k, eps=cfg.norm_eps) for k in range(1, cfg.depth + 1)]
+            )
+        else:
+            self.level_norms = nn.ModuleList([])
+
         if cfg.readout_pool == "attn":
             self.pool_query = nn.Parameter(torch.empty(self.mem_dim))
             nn.init.normal_(self.pool_query, mean=0.0, std=0.02)
 
-        self.readout = nn.Sequential(
-            nn.Linear(self.mem_dim, cfg.readout_hidden),
-            nn.ReLU(),
-            nn.Dropout(p=cfg.readout_dropout),
-            nn.Linear(cfg.readout_hidden, cfg.out_dim),
+        # Stable readout: (optional) input LayerNorm + (optional) residual block(s) in hidden space
+        self.readout_in_norm = nn.LayerNorm(self.mem_dim, eps=cfg.norm_eps) if cfg.prenorm else nn.Identity()
+        self.readout_in = nn.Linear(self.mem_dim, cfg.readout_hidden)
+        self.readout_act = nn.GELU()
+        self.readout_drop = nn.Dropout(p=cfg.readout_dropout)
+
+        self.readout_hidden_norm = nn.LayerNorm(cfg.readout_hidden, eps=cfg.norm_eps) if cfg.prenorm else nn.Identity()
+        self.readout_residual = (
+            _ResidualReadoutBlock(cfg.readout_hidden, cfg.readout_hidden, cfg.readout_dropout, eps=cfg.norm_eps)
+            if cfg.readout_residual
+            else nn.Identity()
         )
+        self.readout_out = nn.Linear(cfg.readout_hidden, cfg.out_dim)
 
     def _log_chunks(self, x: torch.Tensor) -> List[torch.Tensor]:
         sig_levels = chunk_signature_levels(
@@ -67,7 +103,16 @@ class BLAMem(nn.Module):
             basepoint=True,
         )
         # log(signature)
-        return element_log(sig_levels)
+        log_levels = element_log(sig_levels)
+
+        if self.cfg.prenorm:
+            # Do not normalize level-0 (it is always 0 after log).
+            normed: List[torch.Tensor] = [log_levels[0]]
+            for ln, lvl in zip(self.level_norms, log_levels[1:], strict=True):
+                normed.append(ln(lvl))
+            return normed
+
+        return log_levels
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 3:
@@ -92,4 +137,9 @@ class BLAMem(nn.Module):
         else:
             pooled = flat_seq[:, -1, :]
 
-        return self.readout(pooled)
+        h = self.readout_in(self.readout_in_norm(pooled))
+        h = self.readout_act(h)
+        h = self.readout_drop(h)
+        # Residual path in hidden space (PreNorm inside block)
+        h = self.readout_residual(self.readout_hidden_norm(h)) if self.cfg.prenorm else self.readout_residual(h)
+        return self.readout_out(h)
