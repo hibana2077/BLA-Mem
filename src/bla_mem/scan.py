@@ -31,9 +31,12 @@ def hillis_steele_scan_inclusive(
         left = [t.narrow(dim, 0, n - step) for t in levels]
         merged = merge(left, right)
 
-        # write back to right slice
-        for k in range(len(levels)):
-            levels[k].narrow(dim, step, n - step).copy_(merged[k])
+        # Autograd-safe update: do not mutate `levels[...]` in-place.
+        updated: List[torch.Tensor] = []
+        for k, t in enumerate(levels):
+            prefix = t.narrow(dim, 0, step)
+            updated.append(torch.cat([prefix, merged[k]], dim=dim))
+        levels = updated
 
         step *= 2
 
