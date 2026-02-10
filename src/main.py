@@ -68,7 +68,7 @@ def train(args):
         optimizer.step()
         
         # Logging
-        if step % 200 == 0:
+        if step % args.val_interval == 0:
             model.eval()
             with torch.no_grad():
                 val_x, val_y = next(val_iter)
@@ -94,6 +94,7 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, required=True, choices=['parity', 'adding'])
     parser.add_argument("--seq_len", type=int, default=100)
     parser.add_argument("--steps", type=int, default=2000)
+    parser.add_argument("--val_interval", type=int, default=200, help="Interval for validation and logging")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--d_model", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
