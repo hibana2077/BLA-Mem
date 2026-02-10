@@ -1,22 +1,26 @@
 # BLA-Mem
 
-MVP code lives in:
+Toy baselines live in:
 
-- Core (OOP + torch): `src/bla_mem/`
-- Experiments (adding/parity): `experiments/mvp.py`
+- Core (OOP + torch + CLI): `src/bla_mem/`
 
-Quickstart (cloud):
+## Quickstart
 
 1) Install:
 
 - `pip install -r requirements.txt`
 - `pip install -e .`
 
-2) Run MVP:
+2) Train (no tqdm; eval every 200 steps by default):
 
-- `python -m experiments.mvp --task adding --model bla --seq-len 4096 --chunk 64 --depth 3 --steps 2000`
-- `python -m experiments.mvp --task parity --model bla --seq-len 4096 --chunk 64 --depth 3 --steps 2000`
+- `python -m bla_mem.cli train --task parity --model transformer --train-len 128 --test-lens 128 256 512 --steps 2000`
+- `python -m bla_mem.cli train --task adding --model sheaf --train-len 128 --test-lens 128 256 512 --steps 2000`
 
-Notes:
+Models:
 
-- `signatory` installation is environment-dependent (torch/cuda matching). If it fails, the code will raise a clear error when trying to compute signatures.
+- `transformer` (baseline)
+- `sheaf` (sheaf-gluing)
+- `ultrametric` (hierarchical heat-flow)
+- `magnus` (Magnus/commutator evolution)
+- `cumulant` (Pre-Lie / cumulant scan)
+- `jump` (Dirichlet-form jump generator)
