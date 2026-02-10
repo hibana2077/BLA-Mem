@@ -36,12 +36,14 @@ def train(args):
     val_seq_len = args.val_seq_len if args.val_seq_len is not None else args.seq_len
 
     # Setup data
+    start_seq_len = args.min_seq_len if args.curriculum else args.seq_len
+
     if args.task == 'parity':
-        train_ds = ParityDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
+        train_ds = ParityDataset(seq_len=start_seq_len, batch_size=args.batch_size, device=device)
         val_ds = ParityDataset(seq_len=val_seq_len, batch_size=args.batch_size, device=device)
         criterion = nn.CrossEntropyLoss()
     elif args.task == 'adding':
-        train_ds = AddingDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
+        train_ds = AddingDataset(seq_len=start_seq_len, batch_size=args.batch_size, device=device)
         val_ds = AddingDataset(seq_len=val_seq_len, batch_size=args.batch_size, device=device)
         criterion = nn.MSELoss()
     
@@ -59,6 +61,12 @@ def train(args):
     start_time = time.time()
     
     for step in range(1, args.steps + 1):
+        if args.curriculum:
+            # Linearly increase seq_len from min_seq_len to seq_len
+            progress = (step - 1) / args.steps
+            current_len = int(args.min_seq_len + (args.seq_len - args.min_seq_len) * progress)
+            train_ds.seq_len = current_len
+
         model.train()
         x, y = next(train_iter)
         
@@ -91,7 +99,8 @@ def train(args):
                     metric_str = f"MSE: {val_loss.item():.6f}"
             
             elapsed = time.time() - start_time
-            print(f"Step {step}/{args.steps} | Loss: {loss.item():.6f} | Val Loss: {val_loss.item():.6f} | {metric_str} | Time: {elapsed:.1f}s")
+            cur_len_str = f"| Len: {train_ds.seq_len} " if args.curriculum else ""
+            print(f"Step {step}/{args.steps} {cur_len_str}| Loss: {loss.item():.6f} | Val Loss: {val_loss.item():.6f} | {metric_str} | Time: {elapsed:.1f}s")
     
     print("Training finished.")
 
@@ -99,8 +108,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True, choices=['gssm', 'mamba', 'transformer'])
     parser.add_argument("--task", type=str, required=True, choices=['parity', 'adding'])
-    parser.add_argument("--seq_len", type=int, default=100)
+    parser.add_argument("--seq_len", type=int, default=100, help="Target sequence length (end length if curriculum)")
     parser.add_argument("--val_seq_len", type=int, default=None, help="Sequence length for validation. Defaults to seq_len if not set.")
+    parser.add_argument("--curriculum", action="store_true", help="Use sequence length curriculum")
+    parser.add_argument("--min_seq_len", type=int, default=40, help="Start sequence length for curriculum")
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--val_interval", type=int, default=200, help="Interval for validation and logging")
     parser.add_argument("--batch_size", type=int, default=32)
