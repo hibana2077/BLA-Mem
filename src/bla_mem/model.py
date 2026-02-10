@@ -140,6 +140,11 @@ class BLAMem(nn.Module):
         h = self.readout_in(self.readout_in_norm(pooled))
         h = self.readout_act(h)
         h = self.readout_drop(h)
-        # Residual path in hidden space (PreNorm inside block)
-        h = self.readout_residual(self.readout_hidden_norm(h)) if self.cfg.prenorm else self.readout_residual(h)
+
+        # Residual path in hidden space (PreNorm lives inside the residual block).
+        if self.cfg.readout_residual:
+            h = self.readout_residual(h)
+        else:
+            h = self.readout_hidden_norm(h)
+
         return self.readout_out(h)
