@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -10,6 +10,37 @@ from tqdm import trange
 
 from bla_mem import BLAMem
 from bla_mem.model import BLAMemConfig
+
+
+def _set_seed(seed: int) -> None:
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _parse_int_list(csv: str) -> List[int]:
+    parts = [p.strip() for p in csv.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("Expected a comma-separated list of ints")
+    return [int(p) for p in parts]
+
+
+def _parse_schedule(spec: str) -> List[tuple[int, int]]:
+    """Parse schedule like: '256:500,512:500,1024:1000'."""
+
+    items: List[tuple[int, int]] = []
+    for raw in [p.strip() for p in spec.split(",") if p.strip()]:
+        if ":" not in raw:
+            raise ValueError("Bad --seq-schedule item. Expected 'len:steps' comma-separated.")
+        a, b = raw.split(":", 1)
+        seq_len = int(a.strip())
+        steps = int(b.strip())
+        if seq_len <= 0 or steps <= 0:
+            raise ValueError("--seq-schedule items must have positive len and steps")
+        items.append((seq_len, steps))
+    if not items:
+        raise ValueError("--seq-schedule must be non-empty")
+    return items
 
 
 def make_adding_batch(batch_size: int, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -45,13 +76,21 @@ def make_parity_batch(batch_size: int, seq_len: int, device: torch.device) -> Tu
 
     idx1 = torch.randint(0, seq_len, (batch_size,), device=device)
     idx2 = torch.randint(0, seq_len, (batch_size,), device=device)
+    # Avoid the (rare) degenerate case idx1 == idx2 which collapses the task.
+    same = idx2 == idx1
+    if bool(same.any()):
+        idx2 = idx2.clone()
+        idx2[same] = (idx2[same] + 1) % seq_len
 
     x[:, :, 0] = bits
     x[torch.arange(batch_size, device=device), idx1, 1] = 1.0
     x[torch.arange(batch_size, device=device), idx2, 1] = 1.0
 
-    y = (bits[torch.arange(batch_size, device=device), idx1].long() ^ bits[torch.arange(batch_size, device=device), idx2].long())
-    return x, y
+    y = (
+        bits[torch.arange(batch_size, device=device), idx1].long()
+        ^ bits[torch.arange(batch_size, device=device), idx2].long()
+    )
+    return x, y.long()
 
 
 class GRUBaseline(nn.Module):
@@ -70,6 +109,12 @@ def main() -> None:
     p.add_argument("--task", choices=["adding", "parity"], required=True)
     p.add_argument("--model", choices=["bla", "gru"], default="bla")
     p.add_argument("--seq-len", type=int, default=4096)
+    p.add_argument(
+        "--seq-schedule",
+        type=str,
+        default="",
+        help="Optional curriculum schedule 'len:steps,...' (overrides --steps and --seq-len).",
+    )
     p.add_argument("--chunk", type=int, default=64)
     p.add_argument("--depth", type=int, default=3)
     p.add_argument("--time-aug", action=argparse.BooleanOptionalAction, default=True)
@@ -81,14 +126,27 @@ def main() -> None:
     p.add_argument("--patience", type=int, default=0, help="Early stop if no eval improvement for this many evals (0 to disable)")
     p.add_argument("--min-delta", type=float, default=0.0, help="Minimum improvement in eval metric to reset patience")
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--grad-clip", type=float, default=1.0, help="0 to disable")
+    p.add_argument("--seed", type=int, default=0, help="0 to disable")
     p.add_argument("--readout-hidden", type=int, default=256)
     p.add_argument("--log-every", type=int, default=50)
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if args.seq_len % args.chunk != 0:
-        raise ValueError("For this MVP, require --seq-len divisible by --chunk.")
+    if args.seed != 0:
+        _set_seed(args.seed)
+
+    schedule: Optional[List[tuple[int, int]]] = _parse_schedule(args.seq_schedule) if args.seq_schedule else None
+
+    if schedule is None:
+        if args.seq_len % args.chunk != 0:
+            raise ValueError("For this MVP, require --seq-len divisible by --chunk.")
+    else:
+        for seq_len, _ in schedule:
+            if seq_len % args.chunk != 0:
+                raise ValueError("For this MVP, require each scheduled seq-len divisible by --chunk.")
 
     if args.task == "adding":
         batch_fn = make_adding_batch
@@ -112,19 +170,19 @@ def main() -> None:
     else:
         model = GRUBaseline(input_dim=2, hidden=args.readout_hidden, out_dim=out_dim).to(device)
 
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     greater_is_better = args.task == "parity"
     best_eval_metric = float("-inf") if greater_is_better else float("inf")
     bad_evals = 0
 
-    def run_eval() -> tuple[float, float]:
+    def run_eval(seq_len: int) -> tuple[float, float]:
         model.eval()
         total_loss = 0.0
         total_metric = 0.0
         with torch.no_grad():
             for _ in range(args.eval_batches):
-                x, y = batch_fn(args.batch, args.seq_len, device)
+                x, y = batch_fn(args.batch, seq_len, device)
                 pred = model(x)
                 loss = loss_fn(pred, y)
                 total_loss += float(loss.detach())
@@ -137,49 +195,75 @@ def main() -> None:
         model.train()
         return total_loss / args.eval_batches, total_metric / args.eval_batches
 
-    model.train()
-    step_iter = range(1, args.steps + 1) if args.no_tqdm else trange(1, args.steps + 1)
-    for step in step_iter:
-        x, y = batch_fn(args.batch, args.seq_len, device)
-        pred = model(x)
+    def train_steps(num_steps: int, seq_len: int, global_step_start: int) -> int:
+        nonlocal best_eval_metric, bad_evals
+        model.train()
+        step_iter = (
+            range(1, num_steps + 1)
+            if args.no_tqdm
+            else trange(1, num_steps + 1, desc=f"train(seq_len={seq_len})")
+        )
+        global_step = global_step_start
+        for local_step in step_iter:
+            global_step += 1
+            x, y = batch_fn(args.batch, seq_len, device)
+            pred = model(x)
 
-        if args.task == "adding":
             loss = loss_fn(pred, y)
-            metric = float(loss.detach())
-            metric_name = "mse"
-        else:
-            loss = loss_fn(pred, y)
-            acc = (pred.argmax(dim=-1) == y).float().mean()
-            metric = float(acc.detach())
-            metric_name = "acc"
-
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-
-        if step % args.log_every == 0:
-            print(f"step={step} loss={float(loss.detach()):.4f} {metric_name}={metric:.4f}")
-
-        if args.eval_every > 0 and step % args.eval_every == 0:
-            eval_loss, eval_metric = run_eval()
-            print(f"eval step={step} loss={eval_loss:.4f} {metric_name}={eval_metric:.4f}")
-
-            improved = (
-                (eval_metric > best_eval_metric + args.min_delta)
-                if greater_is_better
-                else (eval_metric < best_eval_metric - args.min_delta)
-            )
-            if improved:
-                best_eval_metric = eval_metric
-                bad_evals = 0
+            if args.task == "adding":
+                metric = float(loss.detach())
+                metric_name = "mse"
             else:
-                bad_evals += 1
-                if args.patience > 0 and bad_evals >= args.patience:
-                    print(
-                        f"early_stop step={step} best_{metric_name}={best_eval_metric:.4f} "
-                        f"bad_evals={bad_evals}/{args.patience}"
-                    )
-                    break
+                acc = (pred.argmax(dim=-1) == y).float().mean()
+                metric = float(acc.detach())
+                metric_name = "acc"
+
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            if args.grad_clip and args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            opt.step()
+
+            if global_step % args.log_every == 0:
+                print(
+                    f"step={global_step} loss={float(loss.detach()):.4f} "
+                    f"{metric_name}={metric:.4f} seq_len={seq_len}"
+                )
+
+            if args.eval_every > 0 and global_step % args.eval_every == 0:
+                eval_loss, eval_metric = run_eval(seq_len)
+                print(
+                    f"eval step={global_step} loss={eval_loss:.4f} "
+                    f"{metric_name}={eval_metric:.4f} seq_len={seq_len}"
+                )
+
+                improved = (
+                    (eval_metric > best_eval_metric + args.min_delta)
+                    if greater_is_better
+                    else (eval_metric < best_eval_metric - args.min_delta)
+                )
+                if improved:
+                    best_eval_metric = eval_metric
+                    bad_evals = 0
+                else:
+                    bad_evals += 1
+                    if args.patience > 0 and bad_evals >= args.patience:
+                        print(
+                            f"early_stop step={global_step} best_{metric_name}={best_eval_metric:.4f} "
+                            f"bad_evals={bad_evals}/{args.patience}"
+                        )
+                        return global_step
+
+        return global_step
+
+    global_step = 0
+    if schedule is None:
+        global_step = train_steps(args.steps, args.seq_len, global_step)
+    else:
+        for seq_len, num_steps in schedule:
+            global_step = train_steps(num_steps, seq_len, global_step)
+            if args.patience > 0 and bad_evals >= args.patience:
+                break
 
 
 if __name__ == "__main__":
