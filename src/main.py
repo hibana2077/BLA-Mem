@@ -110,7 +110,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, required=True, choices=['gssm', 'mamba', 'transformer'])
+    parser.add_argument("--model", type=str, required=True, choices=['gssm', 'mamba', 'transformer', 'gru', 'lstm'])
     parser.add_argument("--task", type=str, required=True, choices=['parity', 'adding'])
     parser.add_argument("--seq_len", type=int, default=100, help="Target sequence length (end length if curriculum)")
     parser.add_argument("--val_seq_len", type=int, default=None, help="Sequence length for validation. Defaults to seq_len if not set.")
