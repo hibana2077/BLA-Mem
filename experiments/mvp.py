@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+import math
+from typing import List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -104,10 +104,86 @@ class GRUBaseline(nn.Module):
         return self.head(h[-1])
 
 
+class LSTMBaseline(nn.Module):
+    def __init__(self, input_dim: int, hidden: int, out_dim: int):
+        super().__init__()
+        self.rnn = nn.LSTM(input_dim, hidden, batch_first=True)
+        self.head = nn.Linear(hidden, out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, (h, _) = self.rnn(x)
+        return self.head(h[-1])
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 16384):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe.unsqueeze(0), persistent=False)  # (1, T, C)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C)
+        t = x.size(1)
+        if t > self.pe.size(1):
+            raise ValueError(f"Sequence length {t} exceeds positional encoding max_len {self.pe.size(1)}")
+        return x + self.pe[:, :t, :]
+
+
+class TransformerBaseline(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        d_model: int,
+        nhead: int,
+        num_layers: int,
+        dim_feedforward: int,
+        dropout: float,
+        out_dim: int,
+        pool: str = "last",
+        max_len: int = 16384,
+    ):
+        super().__init__()
+        if d_model % nhead != 0:
+            raise ValueError(f"Transformer d_model ({d_model}) must be divisible by nhead ({nhead})")
+        if pool not in {"last", "mean"}:
+            raise ValueError("--tf-pool must be one of: last, mean")
+
+        self.in_proj = nn.Linear(input_dim, d_model)
+        self.pos = SinusoidalPositionalEncoding(d_model=d_model, max_len=max_len)
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
+        self.pool = pool
+        self.head = nn.Linear(d_model, out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, input_dim)
+        h = self.in_proj(x)
+        h = self.pos(h)
+        h = self.encoder(h)
+
+        if self.pool == "mean":
+            h = h.mean(dim=1)
+        else:
+            h = h[:, -1, :]
+        return self.head(h)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--task", choices=["adding", "parity"], required=True)
-    p.add_argument("--model", choices=["bla", "gru"], default="bla")
+    p.add_argument("--model", choices=["bla", "gru", "lstm", "transformer"], default="bla")
     p.add_argument("--seq-len", type=int, default=4096)
     p.add_argument(
         "--seq-schedule",
@@ -130,6 +206,11 @@ def main() -> None:
     p.add_argument("--grad-clip", type=float, default=1.0, help="0 to disable")
     p.add_argument("--seed", type=int, default=0, help="0 to disable")
     p.add_argument("--readout-hidden", type=int, default=256)
+    p.add_argument("--tf-nhead", type=int, default=8)
+    p.add_argument("--tf-layers", type=int, default=4)
+    p.add_argument("--tf-ffn", type=int, default=1024)
+    p.add_argument("--tf-dropout", type=float, default=0.1)
+    p.add_argument("--tf-pool", choices=["last", "mean"], default="last")
     p.add_argument("--log-every", type=int, default=50)
     args = p.parse_args()
 
@@ -167,8 +248,21 @@ def main() -> None:
             out_dim=out_dim,
         )
         model: nn.Module = BLAMem(cfg).to(device)
-    else:
+    elif args.model == "gru":
         model = GRUBaseline(input_dim=2, hidden=args.readout_hidden, out_dim=out_dim).to(device)
+    elif args.model == "lstm":
+        model = LSTMBaseline(input_dim=2, hidden=args.readout_hidden, out_dim=out_dim).to(device)
+    else:
+        model = TransformerBaseline(
+            input_dim=2,
+            d_model=args.readout_hidden,
+            nhead=args.tf_nhead,
+            num_layers=args.tf_layers,
+            dim_feedforward=args.tf_ffn,
+            dropout=args.tf_dropout,
+            out_dim=out_dim,
+            pool=args.tf_pool,
+        ).to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
