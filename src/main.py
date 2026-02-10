@@ -15,12 +15,17 @@ def get_model(args, device):
     else:
         raise ValueError(f"Unknown task: {args.task}")
 
+    # Ensure max_len covers both train and val seq_len for Transformer PE
+    val_len = args.val_seq_len if args.val_seq_len else args.seq_len
+    max_seq_len = max(args.seq_len, val_len)
+
     if args.model == 'gssm':
         return GSSM(d_in=d_in, d_model=args.d_model, k_group=args.d_model//2).to(device)
     elif args.model == 'mamba':
         return SimpleMamba(d_in=d_in, d_model=args.d_model).to(device)
     elif args.model == 'transformer':
-        return TransformerBaseline(d_in=d_in, d_model=args.d_model, max_len=args.seq_len * 2).to(device)
+        # Allocate enough PE for the longest sequence we might see
+        return TransformerBaseline(d_in=d_in, d_model=args.d_model, max_len=max_seq_len * 2).to(device)
     else:
         raise ValueError(f"Unknown model: {args.model}")
 
@@ -28,14 +33,16 @@ def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+    val_seq_len = args.val_seq_len if args.val_seq_len is not None else args.seq_len
+
     # Setup data
     if args.task == 'parity':
         train_ds = ParityDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
-        val_ds = ParityDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
+        val_ds = ParityDataset(seq_len=val_seq_len, batch_size=args.batch_size, device=device)
         criterion = nn.CrossEntropyLoss()
     elif args.task == 'adding':
         train_ds = AddingDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
-        val_ds = AddingDataset(seq_len=args.seq_len, batch_size=args.batch_size, device=device)
+        val_ds = AddingDataset(seq_len=val_seq_len, batch_size=args.batch_size, device=device)
         criterion = nn.MSELoss()
     
     train_iter = iter(train_ds)
@@ -93,6 +100,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, required=True, choices=['gssm', 'mamba', 'transformer'])
     parser.add_argument("--task", type=str, required=True, choices=['parity', 'adding'])
     parser.add_argument("--seq_len", type=int, default=100)
+    parser.add_argument("--val_seq_len", type=int, default=None, help="Sequence length for validation. Defaults to seq_len if not set.")
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--val_interval", type=int, default=200, help="Interval for validation and logging")
     parser.add_argument("--batch_size", type=int, default=32)
